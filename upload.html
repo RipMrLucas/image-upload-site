@@ -52,27 +52,32 @@
   window.addEventListener('DOMContentLoaded', loadFiles)
 
   uploadBtn.addEventListener('click', async () => {
-    const file = fileInput.files[0]
-    if (!file) {
-      alert('Please select a file.')
-      return
-    }
-    const fileName = `${Date.now()}-${file.name}`
-    status.textContent = 'Uploading...'
+  const file = fileInput.files[0]
+  if (!file) {
+    alert('Please select a file.')
+    return
+  }
 
-    const { data, error } = await supabase.storage
-      .from(bucket)
-      .upload(fileName, file)
+  // Clean the filename: remove spaces, slashes, backslashes
+  const safeFileName = file.name.replace(/[\\/ ]/g, '_')
+  const fileName = `${Date.now()}-${safeFileName}`
 
-    if (error) {
-      status.textContent = 'Upload failed'
-      console.error(error)
-    } else {
-      status.textContent = 'Upload successful'
-      fileInput.value = ''
-      loadFiles()
-    }
-  })
+  status.textContent = 'Uploading...'
+
+  const { data, error } = await supabase.storage
+    .from(bucket)
+    .upload(fileName, file, { upsert: false }) // upsert false to avoid overwrite
+
+  if (error) {
+    console.error('Upload error:', error)
+    status.textContent = `Upload failed: ${error.message}`
+  } else {
+    status.textContent = 'Upload successful'
+    fileInput.value = ''
+    loadFiles()
+  }
+})
+
 
   async function loadFiles() {
     fileList.innerHTML = ''
