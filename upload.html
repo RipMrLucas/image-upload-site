@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Supabase Image/Video Upload</title>
+</head>
+<body>
+  <h2>Upload Image or Video</h2>
+  <input type="file" id="fileInput" />
+  <button onclick="uploadFile()">Upload</button>
+  <p id="output"></p>
+
+  <script type="module">
+    import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm'
+
+    const supabaseUrl = 'https://mblnepfihcxbjkiviltm.supabase.co'
+    const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1ibG5lcGZpaGN4YmpraXZpbHRtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDk2NDg0NDIsImV4cCI6MjA2NTIyNDQ0Mn0.j5tV_DPirVfu9A4QpofzT6LkVyJrNldCUHkBomEfMyU'
+    const bucket = 'media' // Make sure this bucket exists and is public
+
+    const supabase = createClient(supabaseUrl, supabaseKey)
+
+    async function uploadFile() {
+      const file = document.getElementById('fileInput').files[0]
+      if (!file) {
+        alert('Please select a file.')
+        return
+      }
+
+      const fileName = `${Date.now()}-${file.name}`
+
+      const { data, error } = await supabase.storage
+        .from(bucket)
+        .upload(fileName, file)
+
+      if (error) {
+        document.getElementById('output').innerText = '❌ Upload failed: ' + error.message
+        return
+      }
+
+      const { data: publicUrl } = supabase.storage
+        .from(bucket)
+        .getPublicUrl(fileName)
+
+      document.getElementById('output').innerHTML = `
+        ✅ Uploaded!<br>
+        Direct Link: <a href="${publicUrl.publicUrl}" target="_blank">${publicUrl.publicUrl}</a>
+      `
+    }
+  </script>
+</body>
+</html>
