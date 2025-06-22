@@ -123,9 +123,16 @@
     progressContainer.style.display = 'block'
 
     for (let i = 0; i < files.length; i++) {
-      const file = files[i]
-      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
-      const fileName = `${Date.now()}-${safeName}`
+  const file = files[i]
+
+  if (file.size > 100 * 1024 * 1024) {
+    alert(`${file.name} is too large (max 100MB).`)
+    continue
+  }
+
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+  const fileName = `${Date.now()}-${safeName}`
+
 
       const { error } = await supabase.storage.from(bucket).upload(fileName, file)
       if (error) {
