@@ -1,148 +1,302 @@
-<input id="file" type="file" accept="image/*,video/*" />
-<button id="uploadBtn">Upload</button>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Image/Video Uploader</title>
 
-<div style="margin-top:10px">
-  <progress id="prog" value="0" max="100" style="width:100%"></progress>
-  <div id="status"></div>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+  <style>
+    body { background-color: #121212; color: #e0e0e0; }
+    .card { background-color: #1e1e1e; border: 1px solid #2c2c2c; margin-top: 20px; }
+    .card-title, .card-body, label, input, button, li, span { color: #e0e0e0 !important; }
+    .list-group-item { background-color: #1e1e1e; border-color: #333; }
+    .btn-outline-secondary, .btn-outline-primary, .btn-outline-danger { color: #e0e0e0; border-color: #444; }
+    .btn-outline-secondary:hover, .btn-outline-primary:hover, .btn-outline-danger:hover { background-color: #333; }
+    input[type="file"].form-control { background-color: #2a2a2a; color: #e0e0e0; border: 1px solid #444; }
+    .media-preview { max-width: 100px; max-height: 60px; object-fit: cover; margin-right: 10px; border-radius: 5px; background:#0c0c0c; }
+    #weatherCard { display: none; }
+    #progressContainer { display: none; }
+  </style>
+</head>
+
+<body>
+<div class="container">
+
+  <!-- Upload -->
+  <div class="card">
+    <div class="card-body">
+      <h3 class="card-title">Upload Images or Videos</h3>
+      <input class="form-control mb-2" type="file" id="fileInput" multiple accept="image/*,video/*">
+      <button id="uploadBtn" class="btn btn-primary">Upload</button>
+      <span id="status" class="ms-3"></span>
+
+      <div id="progressContainer" class="progress mt-3">
+        <div id="uploadProgress"
+             class="progress-bar progress-bar-striped bg-success"
+             role="progressbar"
+             style="width: 0%">0%</div>
+      </div>
+
+      <div class="mt-2 small opacity-75">
+        Uses Cloudflare Worker presigned PUT → direct to R2 (max 250MB/file).
+      </div>
+    </div>
+  </div>
+
+  <!-- File List -->
+  <div class="card">
+    <div class="card-body">
+      <h4 class="card-title">Uploaded Files</h4>
+      <ul id="fileList" class="list-group list-group-flush"></ul>
+    </div>
+  </div>
+
+  <!-- Weather -->
+  <div class="card">
+    <div class="card-body">
+      <h4 class="card-title">Weather Info</h4>
+      <button class="btn btn-info mb-2" onclick="fetchWeather()">Show Weather</button>
+      <div id="weatherCard">
+        <p id="weatherOutput">Fetching weather...</p>
+      </div>
+    </div>
+  </div>
+
 </div>
 
-<hr />
-
-<div id="gallery" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap:12px;"></div>
-
 <script>
-const API_BASE = "https://imagehost-upload-api.pashka20003333.workers.dev";
+  // ✅ Your Worker URL
+  const API_BASE = "https://imagehost-upload-api.pashka20003333.workers.dev";
 
-const fileEl = document.getElementById("file");
-const uploadBtn = document.getElementById("uploadBtn");
-const prog = document.getElementById("prog");
-const statusEl = document.getElementById("status");
-const galleryEl = document.getElementById("gallery");
+  const fileInput = document.getElementById('fileInput');
+  const uploadBtn = document.getElementById('uploadBtn');
+  const status = document.getElementById('status');
+  const fileList = document.getElementById('fileList');
+  const progressBar = document.getElementById('uploadProgress');
+  const progressContainer = document.getElementById('progressContainer');
 
-uploadBtn.addEventListener("click", async () => {
-  const file = fileEl.files?.[0];
-  if (!file) return setStatus("Pick a file first.");
+  window.addEventListener('DOMContentLoaded', loadFiles);
 
-  prog.value = 0;
-  setStatus("Requesting upload URL...");
-
-  // 1) Ask Worker for presigned URL
-  const signRes = await fetch(`${API_BASE}/sign`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      filename: file.name,
-      contentType: file.type || "application/octet-stream",
-      size: file.size
-    })
-  });
-
-  if (!signRes.ok) {
-    const err = await safeJson(signRes);
-    return setStatus(`Sign failed: ${signRes.status} ${JSON.stringify(err)}`);
-  }
-
-  const { uploadUrl, publicUrl } = await signRes.json();
-
-  // 2) Upload directly to R2 with progress
-  setStatus("Uploading to R2...");
-  await putWithProgress(uploadUrl, file, file.type, (pct) => {
-    prog.value = pct;
-    setStatus(`Uploading... ${pct}%`);
-  });
-
-  // 3) Show result + refresh gallery
-  setStatus(`Done! Public URL: ${publicUrl}`);
-  fileEl.value = "";
-  await loadGallery();
-});
-
-async function loadGallery() {
-  const res = await fetch(`${API_BASE}/list`);
-  if (!res.ok) return setStatus("Failed to load gallery.");
-  const data = await res.json();
-
-  galleryEl.innerHTML = "";
-  for (const f of data.files) {
-    const url = f.publicUrl;
-    const isVideo = /\.(mp4|webm|mov)$/i.test(f.key);
-
-    const card = document.createElement("div");
-    card.style.border = "1px solid #333";
-    card.style.borderRadius = "10px";
-    card.style.padding = "8px";
-    card.style.background = "#111";
-
-    const a = document.createElement("a");
-    a.href = url;
-    a.target = "_blank";
-    a.rel = "noopener noreferrer";
-    a.style.color = "#7aa2ff";
-    a.style.wordBreak = "break-all";
-    a.textContent = f.key.split("/").pop();
-
-    if (isVideo) {
-      const v = document.createElement("video");
-      v.src = url;
-      v.controls = true;
-      v.muted = true;
-      v.playsInline = true;
-      v.style.width = "100%";
-      v.style.borderRadius = "8px";
-      card.appendChild(v);
-    } else {
-      const img = document.createElement("img");
-      img.src = url;
-      img.alt = f.key;
-      img.loading = "lazy";
-      img.style.width = "100%";
-      img.style.borderRadius = "8px";
-      card.appendChild(img);
+  uploadBtn.addEventListener('click', async () => {
+    const files = fileInput.files;
+    if (!files.length) {
+      alert('Please select one or more files.');
+      return;
     }
 
-    const meta = document.createElement("div");
-    meta.style.marginTop = "6px";
-    meta.style.fontSize = "12px";
-    meta.style.opacity = "0.8";
-    meta.textContent = `${(f.size/1024/1024).toFixed(2)} MB`;
+    status.textContent = 'Uploading...';
+    progressContainer.style.display = 'block';
+    progressBar.style.width = '0%';
+    progressBar.textContent = '0%';
 
-    card.appendChild(meta);
-    card.appendChild(a);
-    galleryEl.appendChild(card);
-  }
-}
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
 
-// Upload with progress using XHR (fetch doesn't expose upload progress)
-function putWithProgress(url, file, contentType, onProgress) {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("PUT", url, true);
-    if (contentType) xhr.setRequestHeader("Content-Type", contentType);
+      // Your Worker allows up to 250MB (keep a warning anyway)
+      if (file.size > 250 * 1024 * 1024) {
+        alert(`${file.name} is too large (max 250MB).`);
+        continue;
+      }
 
-    xhr.upload.onprogress = (e) => {
-      if (!e.lengthComputable) return;
-      const pct = Math.round((e.loaded / e.total) * 100);
-      onProgress(pct);
-    };
+      // 1) Ask Worker for a presigned URL
+      const signRes = await fetch(`${API_BASE}/sign`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename: file.name,
+          contentType: file.type || "application/octet-stream",
+          size: file.size
+        })
+      });
 
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) resolve();
-      else reject(new Error(`PUT failed: ${xhr.status} ${xhr.responseText}`));
-    };
+      if (!signRes.ok) {
+        const text = await signRes.text();
+        console.error("Sign error:", text);
+        status.textContent = `Sign failed: ${signRes.status}`;
+        alert("Sign failed: " + text);
+        return;
+      }
 
-    xhr.onerror = () => reject(new Error("Network error during upload"));
-    xhr.send(file);
+      const { uploadUrl, publicUrl, key } = await signRes.json();
+
+      // 2) Upload directly to R2 (with progress)
+      await putWithProgress(uploadUrl, file, file.type, (pctOfThisFile) => {
+        // overall progress: files done + current file %
+        const overall = Math.round(((i + pctOfThisFile / 100) / files.length) * 100);
+        progressBar.style.width = overall + '%';
+        progressBar.textContent = overall + '%';
+      });
+
+      // Optional: show link after each upload
+      status.textContent = `Uploaded: ${key}`;
+    }
+
+    status.textContent = 'Upload complete!';
+    progressBar.style.width = '100%';
+    progressBar.textContent = '100%';
+    fileInput.value = '';
+
+    // refresh list (sometimes list can lag a moment; quick retry)
+    await loadFilesWithRetry();
   });
-}
 
-function setStatus(msg) {
-  statusEl.textContent = msg;
-}
+  async function loadFilesWithRetry() {
+    for (let t = 0; t < 4; t++) {
+      await loadFiles();
+      if (fileList.children.length > 0) return;
+      await new Promise(r => setTimeout(r, 600 + t * 400));
+    }
+  }
 
-async function safeJson(res) {
-  try { return await res.json(); } catch { return await res.text(); }
-}
+  async function loadFiles() {
+    fileList.innerHTML = '';
 
-// Load gallery on page load
-loadGallery();
+    const res = await fetch(`${API_BASE}/list`);
+    if (!res.ok) {
+      const text = await res.text();
+      console.error("List error:", text);
+      status.textContent = "Error listing files";
+      return;
+    }
+
+    const data = await res.json();
+    const files = data.files || [];
+
+    if (!files.length) {
+      const li = document.createElement('li');
+      li.className = 'list-group-item';
+      li.innerHTML = `<span class="opacity-75">No files yet. Upload something!</span>`;
+      fileList.appendChild(li);
+      return;
+    }
+
+    files.forEach(file => {
+      const url = file.publicUrl;
+      const name = file.key.split('/').pop();
+
+      const li = document.createElement('li');
+      li.className = 'list-group-item';
+
+      let preview = '';
+      if (file.key.match(/\.(jpg|jpeg|png|gif|webp|avif)$/i)) {
+        // cache-bust so fresh uploads show immediately
+        preview = `<img src="${url}?v=${Date.now()}" class="media-preview" />`;
+      } else if (file.key.match(/\.(mp4|webm|ogg|mov|m4v)$/i)) {
+        preview = `<video src="${url}" class="media-preview" muted playsinline></video>`;
+      } else {
+        preview = `<div class="media-preview d-flex align-items-center justify-content-center border border-secondary">
+                    <span class="small">FILE</span>
+                  </div>`;
+      }
+
+      li.innerHTML = `
+        <div class="d-flex align-items-center justify-content-between gap-2 flex-wrap">
+          <div class="d-flex align-items-center">
+            ${preview}
+            <div>
+              <div>${name}</div>
+              <div class="small opacity-75">${formatBytes(file.size || 0)}</div>
+            </div>
+          </div>
+
+          <div>
+            <button class="btn btn-sm btn-outline-secondary me-1" onclick="copyLink('${url}')">Copy Link</button>
+            <a href="${url}" target="_blank" class="btn btn-sm btn-outline-primary me-1">View</a>
+            <button class="btn btn-sm btn-outline-danger" onclick="deleteFile('${file.key}')">Delete</button>
+          </div>
+        </div>
+      `;
+
+      fileList.appendChild(li);
+    });
+  }
+
+  // Upload with progress (XHR)
+  function putWithProgress(url, file, contentType, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("PUT", url, true);
+      if (contentType) xhr.setRequestHeader("Content-Type", contentType);
+
+      xhr.upload.onprogress = (e) => {
+        if (!e.lengthComputable) return;
+        const pct = Math.round((e.loaded / e.total) * 100);
+        onProgress(pct);
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) resolve();
+        else reject(new Error(`PUT failed: ${xhr.status} ${xhr.responseText}`));
+      };
+
+      xhr.onerror = () => reject(new Error("Network error during upload"));
+      xhr.send(file);
+    });
+  }
+
+  window.copyLink = (url) => {
+    navigator.clipboard.writeText(url).then(() => alert('Link copied to clipboard!'));
+  };
+
+  // Not implemented yet in Worker (safe placeholder)
+  window.deleteFile = async (key) => {
+    alert("Delete is not enabled yet (Worker has no /delete endpoint). If you want, I’ll add it safely.");
+  };
+
+  function formatBytes(bytes) {
+    if (!bytes) return "0 B";
+    const units = ["B","KB","MB","GB"];
+    let i=0, n=bytes;
+    while (n >= 1024 && i < units.length-1) { n/=1024; i++; }
+    return `${n.toFixed(i===0?0:2)} ${units[i]}`;
+  }
+
+  // Weather feature (kept as you had it)
+  window.fetchWeather = () => {
+    const output = document.getElementById('weatherOutput');
+    const card = document.getElementById('weatherCard');
+    card.style.display = 'block';
+
+    if ('geolocation' in navigator) {
+      navigator.geolocation.getCurrentPosition(async (pos) => {
+        const lat = pos.coords.latitude;
+        const lon = pos.coords.longitude;
+
+        const last = JSON.parse(localStorage.getItem('weatherInfo')) || {};
+        if (last.lat === lat && last.lon === lon && Date.now() - last.timestamp < 30 * 60 * 1000) {
+          output.innerHTML = last.data;
+          return;
+        }
+
+        const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,weathercode&daily=temperature_2m_max,temperature_2m_min&timezone=auto`;
+        const res = await fetch(url);
+        const json = await res.json();
+
+        const current = json.current.temperature_2m;
+        const max = json.daily.temperature_2m_max[0];
+        const min = json.daily.temperature_2m_min[0];
+
+        const cToF = c => (c * 9/5 + 32).toFixed(1);
+        const cToK = c => (c + 273.15).toFixed(1);
+
+        const location = `${lat.toFixed(2)}, ${lon.toFixed(2)}`;
+        const data = `
+          <strong>Now:</strong> ${current}°C / ${cToF(current)}°F / ${cToK(current)}K<br>
+          <strong>Max:</strong> ${max}°C / ${cToF(max)}°F / ${cToK(max)}K<br>
+          <strong>Min:</strong> ${min}°C / ${cToF(min)}°F / ${cToK(min)}K<br>
+          <strong>Location:</strong> ${location}
+        `;
+        output.innerHTML = data;
+        localStorage.setItem('weatherInfo', JSON.stringify({ lat, lon, data, timestamp: Date.now() }));
+      });
+    } else {
+      output.textContent = 'Geolocation not supported.';
+    }
+  };
 </script>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
