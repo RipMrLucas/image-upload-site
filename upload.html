@@ -77,6 +77,34 @@
   const progressBar = document.getElementById('uploadProgress');
   const progressContainer = document.getElementById('progressContainer');
 
+  const TOKEN_STORE_KEY = "deleteTokensByKey_v1";
+
+  function loadTokenStore() {
+    try { return JSON.parse(localStorage.getItem(TOKEN_STORE_KEY)) || {}; }
+    catch { return {}; }
+  }
+
+  function saveTokenStore(store) {
+    localStorage.setItem(TOKEN_STORE_KEY, JSON.stringify(store));
+  }
+
+  function setDeleteTokenForKey(key, token) {
+    const store = loadTokenStore();
+    store[key] = token;
+    saveTokenStore(store);
+  }
+
+  function getDeleteTokenForKey(key) {
+    const store = loadTokenStore();
+    return store[key] || "";
+  }
+
+  function removeDeleteTokenForKey(key) {
+    const store = loadTokenStore();
+    delete store[key];
+    saveTokenStore(store);
+  }
+
   window.addEventListener('DOMContentLoaded', loadFiles);
 
   uploadBtn.addEventListener('click', async () => {
@@ -94,42 +122,62 @@
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
 
-      // Your Worker allows up to 250MB (keep a warning anyway)
       if (file.size > 250 * 1024 * 1024) {
         alert(`${file.name} is too large (max 250MB).`);
         continue;
       }
 
-      // 1) Ask Worker for a presigned URL
-      const signRes = await fetch(`${API_BASE}/sign`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          filename: file.name,
-          contentType: file.type || "application/octet-stream",
-          size: file.size
-        })
-      });
+      // IMPORTANT: Use same content-type consistently
+      const ct = file.type || "application/octet-stream";
 
-      if (!signRes.ok) {
-        const text = await signRes.text();
-        console.error("Sign error:", text);
-        status.textContent = `Sign failed: ${signRes.status}`;
-        alert("Sign failed: " + text);
+      // 1) Ask Worker for a presigned URL (+ deleteToken)
+      let signJson;
+      try {
+        const signRes = await fetch(`${API_BASE}/sign`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            filename: file.name,
+            contentType: ct,
+            size: file.size
+          })
+        });
+
+        if (!signRes.ok) {
+          const text = await signRes.text();
+          console.error("Sign error:", text);
+          status.textContent = `Sign failed: ${signRes.status}`;
+          alert("Sign failed: " + text);
+          return;
+        }
+
+        signJson = await signRes.json();
+      } catch (e) {
+        console.error(e);
+        status.textContent = "Sign failed (network)";
+        alert("Sign failed: " + e.message);
         return;
       }
 
-      const { uploadUrl, publicUrl, key } = await signRes.json();
+      const { uploadUrl, publicUrl, key, deleteToken } = signJson;
+
+      // Save delete token locally (so user can delete later)
+      if (key && deleteToken) setDeleteTokenForKey(key, deleteToken);
 
       // 2) Upload directly to R2 (with progress)
-      await putWithProgress(uploadUrl, file, file.type, (pctOfThisFile) => {
-        // overall progress: files done + current file %
-        const overall = Math.round(((i + pctOfThisFile / 100) / files.length) * 100);
-        progressBar.style.width = overall + '%';
-        progressBar.textContent = overall + '%';
-      });
+      try {
+        await putWithProgress(uploadUrl, file, ct, (pctOfThisFile) => {
+          const overall = Math.round(((i + pctOfThisFile / 100) / files.length) * 100);
+          progressBar.style.width = overall + '%';
+          progressBar.textContent = overall + '%';
+        });
+      } catch (e) {
+        console.error(e);
+        status.textContent = "Upload failed";
+        alert("Upload failed: " + e.message);
+        return;
+      }
 
-      // Optional: show link after each upload
       status.textContent = `Uploaded: ${key}`;
     }
 
@@ -138,7 +186,6 @@
     progressBar.textContent = '100%';
     fileInput.value = '';
 
-    // refresh list (sometimes list can lag a moment; quick retry)
     await loadFilesWithRetry();
   });
 
@@ -175,13 +222,13 @@
     files.forEach(file => {
       const url = file.publicUrl;
       const name = file.key.split('/').pop();
+      const key = file.key;
 
       const li = document.createElement('li');
       li.className = 'list-group-item';
 
       let preview = '';
       if (file.key.match(/\.(jpg|jpeg|png|gif|webp|avif)$/i)) {
-        // cache-bust so fresh uploads show immediately
         preview = `<img src="${url}?v=${Date.now()}" class="media-preview" />`;
       } else if (file.key.match(/\.(mp4|webm|ogg|mov|m4v)$/i)) {
         preview = `<video src="${url}" class="media-preview" muted playsinline></video>`;
@@ -190,6 +237,11 @@
                     <span class="small">FILE</span>
                   </div>`;
       }
+
+      const haveToken = !!getDeleteTokenForKey(key);
+      const deleteBtn = haveToken
+        ? `<button class="btn btn-sm btn-outline-danger" onclick="deleteFile('${key.replace(/'/g, "\\'")}')">Delete</button>`
+        : `<button class="btn btn-sm btn-outline-danger" disabled title="You can only delete files you uploaded from this browser.">Delete</button>`;
 
       li.innerHTML = `
         <div class="d-flex align-items-center justify-content-between gap-2 flex-wrap">
@@ -204,7 +256,7 @@
           <div>
             <button class="btn btn-sm btn-outline-secondary me-1" onclick="copyLink('${url}')">Copy Link</button>
             <a href="${url}" target="_blank" class="btn btn-sm btn-outline-primary me-1">View</a>
-            <button class="btn btn-sm btn-outline-danger" onclick="deleteFile('${file.key}')">Delete</button>
+            ${deleteBtn}
           </div>
         </div>
       `;
@@ -240,9 +292,41 @@
     navigator.clipboard.writeText(url).then(() => alert('Link copied to clipboard!'));
   };
 
-  // Not implemented yet in Worker (safe placeholder)
+  // ✅ Delete using per-file token stored in this browser
   window.deleteFile = async (key) => {
-    alert("Delete is not enabled yet (Worker has no /delete endpoint). If you want, I’ll add it safely.");
+    const token = getDeleteTokenForKey(key);
+    if (!token) {
+      alert("No delete token found for this file in this browser.");
+      return;
+    }
+
+    if (!confirm("Delete this file? This cannot be undone.")) return;
+
+    status.textContent = "Deleting...";
+
+    try {
+      const res = await fetch(`${API_BASE}/delete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key, token })
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        console.error("Delete error:", text);
+        status.textContent = "Delete failed";
+        alert("Delete failed: " + text);
+        return;
+      }
+
+      removeDeleteTokenForKey(key);
+      status.textContent = "Deleted!";
+      await loadFilesWithRetry();
+    } catch (e) {
+      console.error(e);
+      status.textContent = "Delete failed (network)";
+      alert("Delete failed: " + e.message);
+    }
   };
 
   function formatBytes(bytes) {
